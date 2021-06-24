@@ -8,6 +8,7 @@ import (
 	"path"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -60,12 +61,10 @@ func imageVolume() corev1.Volume {
 	}
 }
 
-func imageCacheConfig(targetNamespace string, config metal3iov1alpha1.ProvisioningSpec) (*metal3iov1alpha1.ProvisioningSpec, error) {
-	// The download URL looks something like:
-	// https://releases-art-rhcos.svc.ci.openshift.org/art/storage/releases/rhcos-4.2/42.80.20190725.1/rhcos-42.80.20190725.1-openstack.qcow2?sha256sum=123
-	downloadURL, err := url.Parse(config.ProvisioningOSDownloadURL)
+func transformURL(targetNamespace, URL string) (string, error) {
+	downloadURL, err := url.Parse(URL)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	imageName := path.Base(fileCompressionSuffix.ReplaceAllString(downloadURL.Path, ""))
 
@@ -77,9 +76,32 @@ func imageCacheConfig(targetNamespace string, config metal3iov1alpha1.Provisioni
 		Scheme: "http",
 		Host: net.JoinHostPort(fmt.Sprintf("%s.%s.svc.cluster.local", stateService, targetNamespace),
 			baremetalHttpPort),
-		Path: fmt.Sprintf("/images/%s/%s", imageName, imageName),
+		Path: fmt.Sprintf("/images/%s/cached-%s", imageName, imageName),
 	}
-	config.ProvisioningOSDownloadURL = cacheURL.String()
+	return cacheURL.String(), nil
+}
+
+func imageCacheConfig(targetNamespace string, config metal3iov1alpha1.ProvisioningSpec) (*metal3iov1alpha1.ProvisioningSpec, error) {
+	// If the URL contains a comma-seperated list and are live images, split and transform the URLs
+	if strings.Contains(config.ProvisioningOSDownloadURL, "-live") && strings.Contains(config.ProvisioningOSDownloadURL, ",") {
+		var allURLs string
+		URLs := strings.Split(config.ProvisioningOSDownloadURL, ",")
+		for _, URL := range URLs {
+			newURL, err := transformURL(targetNamespace, URL)
+			if err != nil {
+				return nil, err
+			}
+			allURLs = allURLs + newURL + ","
+		}
+		config.ProvisioningOSDownloadURL = strings.TrimSuffix(allURLs, ",")
+		return &config, nil
+	}
+
+	cacheURL, err := transformURL(targetNamespace, config.ProvisioningOSDownloadURL)
+	if err != nil {
+		return nil, err
+	}
+	config.ProvisioningOSDownloadURL = cacheURL
 	return &config, nil
 }
 
@@ -104,6 +126,10 @@ func createContainerImageCache(images *Images) corev1.Container {
 			{
 				Name:  httpPort,
 				Value: strconv.Itoa(imageCachePort),
+			},
+			{
+				Name:  ironicHttpd,
+				Value: "true",
 			},
 			// The provisioning IP is not used except:
 			// - httpd cannot start until the IP is available on some interface
@@ -198,7 +224,6 @@ func newImageCachePodTemplateSpec(info *ProvisioningInfo) (*corev1.PodTemplateSp
 			},
 			InitContainers: injectProxyAndCA([]corev1.Container{
 				createInitContainerMachineOsDownloader(info, false),
-				createInitContainerIpaDownloader(info.Images),
 			}, info.Proxy),
 			Containers:        containers,
 			HostNetwork:       true,

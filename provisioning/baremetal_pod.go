@@ -56,6 +56,7 @@ const (
 	ironicCertEnvVar                 = "IRONIC_CACERT_FILE"
 	sshKeyEnvVar                     = "IRONIC_RAMDISK_SSH_KEY"
 	externalIpEnvVar                 = "IRONIC_EXTERNAL_IP"
+	ironicHttpd                      = "IRONIC_HTTPD"
 	cboOwnedAnnotation               = "baremetal.openshift.io/owned"
 	cboLabelName                     = "baremetal.openshift.io/cluster-baremetal-operator"
 	externalTrustBundleConfigMapName = "cbo-trusted-ca"
@@ -246,9 +247,7 @@ func setIronicExternalIp(name string, config *metal3iov1alpha1.ProvisioningSpec)
 }
 
 func newMetal3InitContainers(info *ProvisioningInfo) []corev1.Container {
-	initContainers := []corev1.Container{
-		createInitContainerIpaDownloader(info.Images),
-	}
+	initContainers := []corev1.Container{}
 
 	// If the provisioning network is disabled, and the user hasn't requested a
 	// particular provisioning IP on the machine CIDR, we have nothing for this container
@@ -258,21 +257,32 @@ func newMetal3InitContainers(info *ProvisioningInfo) []corev1.Container {
 	}
 
 	initContainers = append(initContainers, createInitContainerMachineOsDownloader(info, true))
+	initContainers = append(initContainers, createInitContainerCoreOSIPA(info))
 
 	return injectProxyAndCA(initContainers, info.Proxy)
 }
 
-func createInitContainerIpaDownloader(images *Images) corev1.Container {
+func createInitContainerCoreOSIPA(info *ProvisioningInfo) corev1.Container {
+	config := &info.ProvConfig.Spec
 	initContainer := corev1.Container{
-		Name:            "metal3-ipa-downloader",
-		Image:           images.IpaDownloader,
-		Command:         []string{"/usr/local/bin/get-resource.sh"},
+		Name:            "metal3-configure-coreos-ipa",
+		Image:           info.Images.Ironic,
+		Command:         []string{"/bin/configure-coreos-ipa"},
 		ImagePullPolicy: "IfNotPresent",
 		SecurityContext: &corev1.SecurityContext{
 			Privileged: pointer.BoolPtr(true),
 		},
-		VolumeMounts: []corev1.VolumeMount{imageVolumeMount},
-		Env:          []corev1.EnvVar{},
+		VolumeMounts: []corev1.VolumeMount{
+			sharedVolumeMount,
+			imageVolumeMount,
+			ironicCredentialsMount,
+			ironicTlsMount,
+		},
+		Env: []corev1.EnvVar{
+			buildEnvVar(provisioningIP, config),
+			buildEnvVar(provisioningInterface, config),
+			buildSSHKeyEnvVar(info.SSHKey),
+		},
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("10m"),
@@ -280,6 +290,7 @@ func createInitContainerIpaDownloader(images *Images) corev1.Container {
 			},
 		},
 	}
+	initContainer.Env = envWithMasterMacAddresses(initContainer.Env, info.MasterMacAddresses)
 	return initContainer
 }
 
@@ -297,9 +308,20 @@ func ipOptionForMachineOsDownloader(info *ProvisioningInfo) string {
 }
 
 func createInitContainerMachineOsDownloader(info *ProvisioningInfo, setIpOptions bool) corev1.Container {
+	imageURL := getMetal3DeploymentConfig(machineImageUrl, &info.ProvConfig.Spec)
 	env := []corev1.EnvVar{
-		buildEnvVar(machineImageUrl, &info.ProvConfig.Spec),
+		{
+			Name:  machineImageUrl,
+			Value: *imageURL,
+		},
 	}
+	var command string
+	if strings.Contains(*imageURL, "-live") && strings.Contains(*imageURL, ".iso") {
+		command = "/usr/local/bin/get-live-images.sh"
+	} else {
+		command = "/usr/local/bin/get-resource.sh"
+	}
+
 	if setIpOptions {
 		env = append(env,
 			corev1.EnvVar{
@@ -310,7 +332,7 @@ func createInitContainerMachineOsDownloader(info *ProvisioningInfo, setIpOptions
 	initContainer := corev1.Container{
 		Name:            "metal3-machine-os-downloader",
 		Image:           info.Images.MachineOsDownloader,
-		Command:         []string{"/usr/local/bin/get-resource.sh"},
+		Command:         []string{command},
 		ImagePullPolicy: "IfNotPresent",
 		SecurityContext: &corev1.SecurityContext{
 			Privileged: pointer.BoolPtr(true),
@@ -347,7 +369,6 @@ func createInitContainerStaticIpSet(images *Images, config *metal3iov1alpha1.Pro
 			},
 		},
 	}
-
 	return initContainer
 }
 
@@ -449,6 +470,7 @@ func createContainerMetal3BaremetalOperator(images *Images, config *metal3iov1al
 			},
 			buildEnvVar(deployKernelUrl, config),
 			buildEnvVar(deployRamdiskUrl, config),
+			buildEnvVar(deployIsoUrl, config),
 			buildEnvVar(ironicEndpoint, config),
 			buildEnvVar(ironicInspectorEndpoint, config),
 			{
@@ -555,6 +577,10 @@ func createContainerMetal3Httpd(images *Images, config *metal3iov1alpha1.Provisi
 			buildEnvVar(provisioningIP, config),
 			buildEnvVar(provisioningInterface, config),
 			buildSSHKeyEnvVar(sshKey),
+			{
+				Name:  ironicHttpd,
+				Value: "true",
+			},
 		},
 		Ports: []corev1.ContainerPort{
 			{

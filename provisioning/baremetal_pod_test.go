@@ -87,7 +87,6 @@ func TestNewMetal3InitContainers(t *testing.T) {
 	images := Images{
 		BaremetalOperator:   expectedBaremetalOperator,
 		Ironic:              expectedIronic,
-		IpaDownloader:       expectedIronicIpaDownloader,
 		MachineOsDownloader: expectedMachineOsDownloader,
 		StaticIpManager:     expectedIronicStaticIpManager,
 	}
@@ -101,16 +100,16 @@ func TestNewMetal3InitContainers(t *testing.T) {
 			config: managedProvisioning().build(),
 			expectedContainers: []corev1.Container{
 				{
-					Name:  "metal3-ipa-downloader",
-					Image: images.IpaDownloader,
-				},
-				{
 					Name:  "metal3-machine-os-downloader",
 					Image: images.MachineOsDownloader,
 				},
 				{
 					Name:  "metal3-static-ip-set",
 					Image: images.StaticIpManager,
+				},
+				{
+					Name:  "metal3-configure-coreos-ipa",
+					Image: images.Ironic,
 				},
 			},
 		},
@@ -119,12 +118,12 @@ func TestNewMetal3InitContainers(t *testing.T) {
 			config: disabledProvisioning().ProvisioningIP("").ProvisioningNetworkCIDR("").build(),
 			expectedContainers: []corev1.Container{
 				{
-					Name:  "metal3-ipa-downloader",
-					Image: images.IpaDownloader,
-				},
-				{
 					Name:  "metal3-machine-os-downloader",
 					Image: images.MachineOsDownloader,
+				},
+				{
+					Name:  "metal3-configure-coreos-ipa",
+					Image: images.Ironic,
 				},
 			},
 		},
@@ -133,12 +132,12 @@ func TestNewMetal3InitContainers(t *testing.T) {
 			config: disabledProvisioning().ProvisioningIP("1.2.3.4").ProvisioningNetworkCIDR("").build(),
 			expectedContainers: []corev1.Container{
 				{
-					Name:  "metal3-ipa-downloader",
-					Image: images.IpaDownloader,
-				},
-				{
 					Name:  "metal3-machine-os-downloader",
 					Image: images.MachineOsDownloader,
+				},
+				{
+					Name:  "metal3-configure-coreos-ipa",
+					Image: images.Ironic,
 				},
 			},
 		},
@@ -157,7 +156,6 @@ func TestNewMetal3Containers(t *testing.T) {
 	images := Images{
 		BaremetalOperator:   expectedBaremetalOperator,
 		Ironic:              expectedIronic,
-		IpaDownloader:       expectedIronicIpaDownloader,
 		MachineOsDownloader: expectedMachineOsDownloader,
 		StaticIpManager:     expectedIronicStaticIpManager,
 	}
@@ -224,7 +222,6 @@ func TestProxyAndCAInjection(t *testing.T) {
 		Images: &Images{
 			BaremetalOperator:   expectedBaremetalOperator,
 			Ironic:              expectedIronic,
-			IpaDownloader:       expectedIronicIpaDownloader,
 			MachineOsDownloader: expectedMachineOsDownloader,
 			StaticIpManager:     expectedIronicStaticIpManager,
 		},
