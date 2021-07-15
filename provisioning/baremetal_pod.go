@@ -431,7 +431,7 @@ func createContainerMetal3BaremetalOperator(images *Images, config *metal3iov1al
 				HostPort:      60000,
 			},
 		},
-		Command:         []string{"/baremetal-operator"},
+		Command:         []string{"/baremetal-operator", "-build-preprov-image"},
 		ImagePullPolicy: "IfNotPresent",
 		VolumeMounts: []corev1.VolumeMount{
 			ironicCredentialsMount,
